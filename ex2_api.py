@@ -2,20 +2,19 @@
 API for ex2, implementing the skip-gram model (with negative sampling).
 
 """
-
-# you can use these packages (uncomment as needed)
 import pickle
-#import pandas as pd
-#import numpy as np
-#import os,time, re, sys, random, math, collections, nltk
+import pandas as pd
+import numpy as np
+import os, time, re, sys, random, math, collections, nltk
+from collections import Counter
 
 
-#static functions
+# static functions
 def who_am_i():  # this is not a class method
     """Returns a dictionary with your name, id number and email. keys=['name', 'id','email']
         Make sure you return your own info!
     """
-    return {'name': 'John Doe', 'id': '012345678', 'email': 'jdoe@post.bgu.ac.il'}
+    return {'name': 'Oryan Yehezkel', 'id': '311495824', 'email': 'oryanyeh@post.bgu.ac.il'}
 
 
 def normalize_text(fn):
@@ -24,11 +23,26 @@ def normalize_text(fn):
     Args:
         fn: full path to the text file to process
     """
+    f = open(fn, "r")
+
+    lines = f.readlines()
+    f.close()
+
     sentences = []
 
-    #TODO
+    for l in lines:
+        l = l.strip()
+
+        if l == "" or l is None:
+            continue
+
+        l = re.sub(r'["|“|”|.|!|?|,]+', "", l)
+        l = l.lower()
+
+        sentences.append(l)
 
     return sentences
+
 
 def sigmoid(x): return 1.0 / (1 + np.exp(-x))
 
@@ -40,23 +54,48 @@ def load_model(fn):
         fn: the full path to the model to load.
     """
 
-    #TODO
+    f = open(fn, "rb")
+    sg_model = pickle.load(f)
+    f.close()
+
     return sg_model
 
 
 class SkipGram:
     def __init__(self, sentences, d=100, neg_samples=4, context=4, word_count_threshold=5):
+        """
+
+        :param sentences: list of sentences
+        :param d: Dimension of the embedding
+        :param neg_samples: number of negative samples to each positive sample
+        :param context: the size of the context window (not counting the target word)
+        :param word_count_threshold: ignore low frequency words (appearing under the threshold)
+        """
         self.sentences = sentences
         self.d = d  # embedding dimension
         self.neg_samples = neg_samples  # num of negative samples for one positive sample
-        self.context = context #the size of the context window (not counting the target word)
-        self.word_count_threshold = word_count_threshold #ignore low frequency words (appearing under the threshold)
+        self.context = context  # the size of the context window (not counting the target word)
+        self.word_count_threshold = word_count_threshold  # ignore low frequency words (appearing under the threshold)
+        self.word_index = {}  # word-index mapping
+        self.word_count = Counter()  # word:count dictionary
 
-        # Tips:
-        # 1. It is recommended to create a word:count dictionary
-        # 2. It is recommended to create a word-index map
+        self.T = np.array([])  # embedding representation of the words as target
+        self.C = np.array([])  # embedding representation of the words as context
 
-        # TODO
+        # populate word_count
+        for line in sentences:
+            self.word_count.update(line.split())
+        self.word_count = dict(self.word_count)
+
+        # ignore low frequency words
+        self.word_count = {k: v for k, v in self.word_count.items()
+                           if v >= word_count_threshold}
+
+        # size of vocabulary
+        self.vocab_size = len(self.word_count)
+
+        # create word-index mapping
+        self.word_index = {w: i for i, w in enumerate(self.word_count.keys())}
 
     def compute_similarity(self, w1, w2):
         """ Returns the cosine similarity (in [0,1]) between the specified words.
@@ -66,10 +105,19 @@ class SkipGram:
             w2: a word
         Retunrns: a float in [0,1]; defaults to 0.0 if one of specified words is OOV.
     """
-        sim  = 0.0 # default
-        #TODO
+        sim = 0.0  # default
+        if w1 not in self.word_index or w2 not in self.word_index:
+            return sim
 
-        return sim # default
+        indx1 = self.word_index[w1]
+        indx2 = self.word_index[w2]
+
+        v1 = self.T[indx1]
+        v2 = self.T[indx2]
+
+        sim = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))  # Cosine-Similarity
+
+        return sim
 
     def get_closest_words(self, w, n=5):
         """Returns a list containing the n words that are the closest to the specified word.
@@ -78,6 +126,41 @@ class SkipGram:
             w: the word to find close words to.
             n: the number of words to return. Defaults to 5.
         """
+
+    def create_samples(self):
+        total_samples = []  # list of tuple of 2 (str: target, vector: (0,1,-1)^|V| | 1 for pos, -1 for neg)
+        for sent in self.sentences:
+            sent_list = sent.split(" ")
+
+            for i in range(len(sent_list)):
+                target = sent_list[i]
+                if target not in self.word_count: continue
+                target_indx = self.word_index[target]
+
+                pos_samples = {}
+                # create positive samples
+                context = sent_list[i - self.context:i] + sent_list[i + 1:i + 1 + self.context]
+                for c in context:
+                    if c not in self.word_count: continue
+                    pos_samples.setdefault(target_indx, []).append(c)
+
+                neg_samples = {}
+                # create negative samples
+                for _ in range(self.neg_samples):
+                    neg_word = random.choice(list(self.word_count.keys()))
+                    neg_samples.setdefault(target_indx, []).append(neg_word)
+
+                # transform samples to vector
+                y = np.zeros(self.vocab_size, dtype=int)
+                for key, context in pos_samples.items():
+                    for v in context:
+                        y[self.word_index[v]] += 1
+                    for _, neg_list in neg_samples.items():
+                        for neg in neg_list:
+                            y[self.word_index[neg]] -= 1
+
+                total_samples.append((target_indx, y))
+        return total_samples
 
 
     def learn_embeddings(self, step_size=0.001, epochs=50, early_stopping=3, model_path=None):
@@ -90,12 +173,11 @@ class SkipGram:
             model_path: full path (including file name) to save the model pickle at.
         """
 
-
-        vocab_size = ... #todo: set to be the number of words in the model (how? how many, indeed?)
-        T = np.random.rand(self.d, vocab_size) # embedding matrix of target words
+        vocab_size = ...  # todo: set to be the number of words in the model (how? how many, indeed?)
+        T = np.random.rand(self.d, vocab_size)  # embedding matrix of target words
         C = np.random.rand(vocab_size, self.d)  # embedding matrix of context words
 
-        #tips:
+        # tips:
         # 1. have a flag that allows printing to standard output so you can follow timing, loss change etc.
         # 2. print progress indicators every N (hundreds? thousands? an epoch?) samples
         # 3. save a temp model after every epoch
@@ -103,8 +185,9 @@ class SkipGram:
         # 4.2. it is recommended to train on word indices and not the strings themselves.
 
         # TODO
+        samples = self.create_samples()
 
-        return T,C
+        return T, C
 
     def combine_vectors(self, T, C, combo=0, model_path=None):
         """Returns a single embedding matrix and saves it to the specified path
@@ -125,7 +208,7 @@ class SkipGram:
 
         return V
 
-    def find_analogy(self, w1,w2,w3):
+    def find_analogy(self, w1, w2, w3):
         """Returns a word (string) that matches the analogy test given the three specified words.
            Required analogy: w1 to w2 is like ____ to w3.
 
@@ -135,7 +218,7 @@ class SkipGram:
              w3: third word in the analogy (string)
         """
 
-        #TODO
+        # TODO
 
         return w
 
