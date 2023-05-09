@@ -2,7 +2,7 @@ from ex2_api import *
 
 fn = 'Corpus/drSeuss.txt'
 norm_text = normalize_text(fn)
-print(norm_text)
 skipgram = SkipGram(norm_text)
 
-samples = skipgram.create_samples()
+# samples = skipgram.create_samples()
+skipgram.learn_embeddings(epochs=50, model_path='models/model.pkl')

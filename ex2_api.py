@@ -7,6 +7,9 @@ import pandas as pd
 import numpy as np
 import os, time, re, sys, random, math, collections, nltk
 from collections import Counter
+from nltk.corpus import stopwords
+
+nltk.download("stopwords", quiet=True)
 
 
 # static functions
@@ -78,24 +81,25 @@ class SkipGram:
         self.word_count_threshold = word_count_threshold  # ignore low frequency words (appearing under the threshold)
         self.word_index = {}  # word-index mapping
         self.word_count = Counter()  # word:count dictionary
-
-        self.T = np.array([])  # embedding representation of the words as target
-        self.C = np.array([])  # embedding representation of the words as context
+        self.stop_words = set(stopwords.words("english"))
 
         # populate word_count
         for line in sentences:
             self.word_count.update(line.split())
         self.word_count = dict(self.word_count)
 
-        # ignore low frequency words
+        # ignore low frequency words and remove stopwords
         self.word_count = {k: v for k, v in self.word_count.items()
-                           if v >= word_count_threshold}
+                           if v >= word_count_threshold and k not in self.stop_words}
 
         # size of vocabulary
         self.vocab_size = len(self.word_count)
 
         # create word-index mapping
         self.word_index = {w: i for i, w in enumerate(self.word_count.keys())}
+
+        self.T = np.random.rand(self.d, self.vocab_size)  # embedding representation of the words as target
+        self.C = np.random.rand(self.vocab_size, self.d)  # embedding representation of the words as context
 
     def compute_similarity(self, w1, w2):
         """ Returns the cosine similarity (in [0,1]) between the specified words.
@@ -146,9 +150,10 @@ class SkipGram:
 
                 neg_samples = {}
                 # create negative samples
-                for _ in range(self.neg_samples):
-                    neg_word = random.choice(list(self.word_count.keys()))
-                    neg_samples.setdefault(target_indx, []).append(neg_word)
+
+                neg_word = random.choices(list(self.word_count.keys()), weights=list(self.word_count.values()),
+                                          k=self.neg_samples)
+                neg_samples.setdefault(target_indx, []).extend(neg_word)
 
                 # transform samples to vector
                 y = np.zeros(self.vocab_size, dtype=int)
@@ -162,8 +167,7 @@ class SkipGram:
                 total_samples.append((target_indx, y))
         return total_samples
 
-
-    def learn_embeddings(self, step_size=0.001, epochs=50, early_stopping=3, model_path=None):
+    def learn_embeddings(self, step_size=0.001, epochs=50, early_stopping=3, model_path=None, printing=True):
         """Returns a trained embedding models and saves it in the specified path
 
         Args:
@@ -173,7 +177,7 @@ class SkipGram:
             model_path: full path (including file name) to save the model pickle at.
         """
 
-        vocab_size = ...  # todo: set to be the number of words in the model (how? how many, indeed?)
+        vocab_size = self.vocab_size
         T = np.random.rand(self.d, vocab_size)  # embedding matrix of target words
         C = np.random.rand(vocab_size, self.d)  # embedding matrix of context words
 
@@ -186,6 +190,51 @@ class SkipGram:
 
         # TODO
         samples = self.create_samples()
+        running_loss = []
+        for i in range(1, epochs + 1):
+            epoch_loss = []
+            for target_index, val in samples:
+                input_layer = np.zeros(self.vocab_size, dtype=int)
+                input_layer[target_index] = 1
+                input_layer = np.vstack(input_layer)
+
+                hidden = T[:, target_index][:, None]
+
+                output_layer = np.dot(C, hidden)
+                y_pred = sigmoid(output_layer)
+                y_true = val.reshape(self.vocab_size, 1)
+                e = y_pred - y_true
+                loss = -(np.dot(np.log(y_pred.reshape(-1)), val.T) + np.dot(np.log(1 - y_pred.reshape(-1)),
+                                                                            (1 - val).T))
+                """
+                I HAVE PROBLEM WITH THE Y OF SAMPLES - HOW TO REPRESENT THE Y_TRUE VECTOR(VAL PARAM)
+                I HAVE PROBLEM WITH THE LOSS - AFTER FEW ITERATION THE LOSS IS NEGATIVE!
+                """
+                epoch_loss.append(loss)
+                outer_grad = np.dot(hidden, e.T).T
+                inner_grad = np.dot(input_layer, np.dot(C.T, e).T).T
+                C -= step_size * outer_grad
+                T -= step_size * inner_grad
+
+            mean_epoch_loss = np.mean(epoch_loss)
+            running_loss.append(epoch_loss)
+            print(f'Epoch {i} Loss: ', round(mean_epoch_loss, 4)) if printing else None
+
+            # backup the last trained model (the last epoch)
+            self.T = T
+            self.C = C
+            with open("temp.pickle", "wb") as f:
+                pickle.dump(self, f)
+
+            step_size *= 1 / (1 + step_size * i)
+        print("done training")
+
+        self.T = T
+        self.C = C
+
+        with open(model_path, "wb") as f:
+            pickle.dump(self, f)
+        print(f"saved as {model_path} file") if printing else None
 
         return T, C
 
