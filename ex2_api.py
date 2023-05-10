@@ -141,30 +141,27 @@ class SkipGram:
                 if target not in self.word_count: continue
                 target_indx = self.word_index[target]
 
-                pos_samples = {}
+                pos_samples = set()
                 # create positive samples
                 context = sent_list[i - self.context:i] + sent_list[i + 1:i + 1 + self.context]
                 for c in context:
-                    if c not in self.word_count: continue
-                    pos_samples.setdefault(target_indx, []).append(c)
+                    if c not in self.word_count or c == target: continue
+                    pos_samples.add(self.word_index[c])
 
-                neg_samples = {}
+                neg_samples = set()
                 # create negative samples
-
                 neg_word = random.choices(list(self.word_count.keys()), weights=list(self.word_count.values()),
-                                          k=self.neg_samples)
-                neg_samples.setdefault(target_indx, []).extend(neg_word)
+                                          k=self.neg_samples * len(pos_samples))
+                neg_samples.update([self.word_index[c] for c in neg_word if c != target])
 
                 # transform samples to vector
-                y = np.zeros(self.vocab_size, dtype=int)
-                for key, context in pos_samples.items():
-                    for v in context:
-                        y[self.word_index[v]] += 1
-                    for _, neg_list in neg_samples.items():
-                        for neg in neg_list:
-                            y[self.word_index[neg]] -= 1
+                pos_y = np.ones(len(pos_samples), dtype=int)
+                neg_y = np.zeros(len(neg_samples - pos_samples), dtype=int)
+                y = np.concatenate((pos_y, neg_y)).reshape((-1, 1))
+                all_samples = list(pos_samples) + list(neg_samples - pos_samples)
 
-                total_samples.append((target_indx, y))
+                if len(all_samples) > 0:
+                    total_samples.append((target_indx, all_samples, y))
         return total_samples
 
     def learn_embeddings(self, step_size=0.001, epochs=50, early_stopping=3, model_path=None, printing=True):
@@ -193,33 +190,36 @@ class SkipGram:
         running_loss = []
         for i in range(1, epochs + 1):
             epoch_loss = []
-            for target_index, val in samples:
+            for target_index, c_indexs, y_true in samples:
                 input_layer = np.zeros(self.vocab_size, dtype=int)
                 input_layer[target_index] = 1
                 input_layer = np.vstack(input_layer)
 
                 hidden = T[:, target_index][:, None]
+                C_context = C[c_indexs]
+                m = len(c_indexs)
 
-                output_layer = np.dot(C, hidden)
+                output_layer = np.dot(C_context, hidden)
                 y_pred = sigmoid(output_layer)
-                y_true = val.reshape(self.vocab_size, 1)
                 e = y_pred - y_true
-                loss = -(np.dot(np.log(y_pred.reshape(-1)), val.T) + np.dot(np.log(1 - y_pred.reshape(-1)),
-                                                                            (1 - val).T))
+                loss = -(np.dot(np.log(y_pred.reshape(-1)), y_true.reshape(-1).T) + np.dot(
+                    np.log(1 - y_pred.reshape(-1)),
+                    (1 - y_true.reshape(-1)).T))
                 """
                 I HAVE PROBLEM WITH THE Y OF SAMPLES - HOW TO REPRESENT THE Y_TRUE VECTOR(VAL PARAM)
                 I HAVE PROBLEM WITH THE LOSS - AFTER FEW ITERATION THE LOSS IS NEGATIVE!
                 """
 
                 epoch_loss.append(loss)
-                outer_grad = np.dot(hidden, e.T).T
-                inner_grad = np.dot(input_layer, np.dot(C.T, e).T).T
-                C -= step_size * outer_grad
-                T -= step_size * inner_grad
+                c_grad = np.dot(hidden, e.T).T
+                # t_grad = np.dot(input_layer, np.dot(C_context.T, e).T).T
+                t_grad = np.dot(e.T, C_context).T / m
+                C[c_indexs, :] -= step_size * c_grad
+                T[:, [target_index]] -= step_size * t_grad
 
             mean_epoch_loss = np.mean(epoch_loss)
             running_loss.append(epoch_loss)
-            print(f'Epoch {i} Loss: ', round(mean_epoch_loss, 4)) if printing else None
+            print(f'Epoch {i} Loss: ', np.round(mean_epoch_loss, 4)) if printing else None
 
             # backup the last trained model (the last epoch)
             self.T = T
