@@ -210,6 +210,7 @@ class SkipGram:
                 I HAVE PROBLEM WITH THE Y OF SAMPLES - HOW TO REPRESENT THE Y_TRUE VECTOR(VAL PARAM)
                 I HAVE PROBLEM WITH THE LOSS - AFTER FEW ITERATION THE LOSS IS NEGATIVE!
                 """
+
                 epoch_loss.append(loss)
                 outer_grad = np.dot(hidden, e.T).T
                 inner_grad = np.dot(input_layer, np.dot(C.T, e).T).T
