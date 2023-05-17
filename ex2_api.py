@@ -49,7 +49,8 @@ def normalize_text(fn):
     return sentences
 
 
-def sigmoid(x): return 1.0 / (1 + np.exp(-x))
+def sigmoid(x):
+    return 1.0 / (1 + np.exp(-x))
 
 
 def load_model(fn):
@@ -68,9 +69,12 @@ def load_model(fn):
 
 
 def save_model(model, fn):
-    with open(fn, "wb") as f:
-        pickle.dump(model, f)
-    print(f"saved as {fn} file") if printing else None
+    if fn is not None:
+        with open(fn, "wb") as f:
+            pickle.dump(model, f)
+        print(f"saved as {fn} file") if printing else None
+    else:
+        print(f"NOT saved as {fn} file") if printing else None
 
 
 class SkipGram:
@@ -145,18 +149,19 @@ class SkipGram:
             n: the number of words to return. Defaults to 5.
         """
         w = w.lower()
-        w_index = self.word_index[w]
         if w not in self.word_index:
             return []
 
-        candidates = [(index, self.compute_similarity(w, self.index_to_word[index])) for index in
-                      self.index_to_word.keys() if index != w_index]
+        w_index = self.word_index[w]
+        word_emb = self.T[:, w_index]
 
-        candidates = sorted(candidates, key=lambda x: x[1], reverse=True)[:n]
+        cos_sim = np.dot(self.T.T, word_emb) / (
+                np.linalg.norm(self.T.T, axis=1) * np.linalg.norm(word_emb))
 
-        print([(self.index_to_word[i[0]],i[1]) for i in candidates]) if printing else None
+        max_sorted = list(np.argsort(cos_sim)[::-1][1:n + 1])  # the first index is the same word
 
-        candidates = [self.index_to_word[i[0]] for i in candidates]
+        candidates = [self.index_to_word[i] for i in max_sorted]
+
         return candidates
 
     def create_pos_samples(self):
@@ -180,20 +185,6 @@ class SkipGram:
             if len(cs) > 0:
                 pos_samples.append(cs)
 
-            # neg_samples = set()
-            # # create negative samples
-            # neg_word = random.choices(list(self.word_count.keys()), weights=list(self.word_count.values()),
-            #                           k=self.neg_samples * len(pos_samples))
-            # neg_samples.update([self.word_index[c] for c in neg_word if c != target])
-            #
-            # # transform samples to vector
-            # pos_y = np.ones(len(pos_samples), dtype=int)
-            # neg_y = np.zeros(len(neg_samples - pos_samples), dtype=int)
-            # y = np.concatenate((pos_y, neg_y)).reshape((-1, 1))
-            # all_samples = list(pos_samples) + list(neg_samples - pos_samples)
-            #
-            # if len(all_samples) > 0:
-            #     total_samples.append((target_indx, all_samples, y))
         return pos_samples
 
     def add_neg_samples(self, t_index, pos_indexes):
@@ -226,6 +217,7 @@ class SkipGram:
             epochs: number or training epochs. Defaults to 50
             early_stopping: stop training if the Loss was not improved for this number of epochs
             model_path: full path (including file name) to save the model pickle at.
+            keep_train: if to keep training and not initial T & C from random
         """
 
         vocab_size = self.vocab_size
@@ -246,6 +238,7 @@ class SkipGram:
         pos_samples = self.create_pos_samples()
 
         print('Start Learning...') if printing else None
+
         running_loss = []
         not_improved = 0
         last_loss = math.inf
@@ -265,17 +258,18 @@ class SkipGram:
                     output_layer = np.dot(C_context, hidden)
                     y_pred = sigmoid(output_layer)
                     e = y_pred - y_true
+
                     loss = -(np.dot(np.log(y_pred.reshape(-1)), y_true.reshape(-1).T) + np.dot(
                         np.log(1 - y_pred.reshape(-1)),
                         (1 - y_true.reshape(-1)).T))
 
-                    epoch_loss.append(loss / len(c_indexes))
+                    epoch_loss.append(loss / m)
                     c_grad = np.dot(hidden, e.T).T
                     # t_grad = np.dot(input_layer, np.dot(C_context.T, e).T).T
                     t_grad = np.dot(e.T, C_context).T / m
                     # C[c_indexes, :] -= step_size * c_grad
                     np.subtract.at(C, c_indexes, step_size * c_grad)
-                    T[:, [t_index]] -= step_size * t_grad
+                    np.subtract.at(T, t_index, step_size * t_grad)
 
             mean_epoch_loss = np.mean(epoch_loss)
             running_loss.append(mean_epoch_loss)
@@ -302,8 +296,7 @@ class SkipGram:
         self.T = T
         self.C = C
 
-        if model_path is not None:
-            save_model(self, model_path)
+        save_model(self, model_path)
 
         return T, C
 
@@ -336,8 +329,7 @@ class SkipGram:
 
         self.V = V
 
-        if model_path is not None:
-            save_model(self, model_path)
+        save_model(self, model_path)
 
         return V
 
@@ -350,10 +342,37 @@ class SkipGram:
              w2: second word in the analogy (string)
              w3: third word in the analogy (string)
         """
+        w1, w2, w3 = w1.lower(), w2.lower(), w3.lower()
 
-        # TODO
+        if w1 not in self.word_count or \
+                w2 not in self.word_count or \
+                w3 not in self.word_count:
+            return ""
 
-        return w
+        w1_index = self.word_index[w1]
+        w2_index = self.word_index[w2]
+        w3_index = self.word_index[w3]
+
+        w1_emb = self.T[:, w1_index]
+        w2_emb = self.T[:, w2_index]
+        w3_emb = self.T[:, w3_index]
+
+        target_emb = w1_emb - w2_emb + w3_emb
+
+        cos_sim = np.dot(self.T.T, target_emb) / (
+                np.linalg.norm(self.T.T, axis=1) * np.linalg.norm(target_emb))
+        max_sorted = list(np.argsort(cos_sim)[::-1][:4])
+
+        # take the first word that is not w1,w2,w3
+        target_index = 0
+        for candidate in max_sorted:
+            if candidate in [w1_index, w2_index, w3_index]:
+                continue
+            else:
+                target_index = candidate
+                break
+
+        return self.index_to_word[target_index]
 
     def test_analogy(self, w1, w2, w3, w4, n=1):
         """Returns True if sim(w1-w2+w3, w4)@n; Otherwise return False.
@@ -368,6 +387,7 @@ class SkipGram:
              n: the distance (work rank) to be accepted as similarity
             """
 
-        # TODO
+        target_w = self.find_analogy(w1, w2, w3)
+        n_closest_words = self.get_closest_words(target_w, n=n)
 
-        return False
+        return w4 in n_closest_words
