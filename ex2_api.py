@@ -8,8 +8,10 @@ import numpy as np
 import os, time, re, sys, random, math, collections, nltk
 from collections import Counter
 from nltk.corpus import stopwords
+from nltk import skipgrams
 
 nltk.download("stopwords", quiet=True)
+printing = True
 
 
 # static functions
@@ -74,6 +76,8 @@ class SkipGram:
         :param context: the size of the context window (not counting the target word)
         :param word_count_threshold: ignore low frequency words (appearing under the threshold)
         """
+        print('++++++++++ Initial SkipGram ++++++++++') if printing else None
+
         self.sentences = sentences
         self.d = d  # embedding dimension
         self.neg_samples = neg_samples  # num of negative samples for one positive sample
@@ -85,7 +89,8 @@ class SkipGram:
 
         # populate word_count
         for line in sentences:
-            self.word_count.update(line.split())
+            line_split = line.split()
+            self.word_count.update(line_split)
         self.word_count = dict(self.word_count)
 
         # ignore low frequency words and remove stopwords
@@ -97,6 +102,7 @@ class SkipGram:
 
         # create word-index mapping
         self.word_index = {w: i for i, w in enumerate(self.word_count.keys())}
+        self.index_to_word = {i: w for w, i in self.word_index.items()}
 
         self.T = np.random.rand(self.d, self.vocab_size)  # embedding representation of the words as target
         self.C = np.random.rand(self.vocab_size, self.d)  # embedding representation of the words as context
@@ -116,8 +122,8 @@ class SkipGram:
         indx1 = self.word_index[w1]
         indx2 = self.word_index[w2]
 
-        v1 = self.T[indx1]
-        v2 = self.T[indx2]
+        v1 = self.T[:, indx1]
+        v2 = self.T[:, indx2]
 
         sim = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))  # Cosine-Similarity
 
@@ -130,41 +136,73 @@ class SkipGram:
             w: the word to find close words to.
             n: the number of words to return. Defaults to 5.
         """
+        w_index = self.word_index[w]
+        if w not in self.word_index:
+            return []
 
-    def create_samples(self):
-        total_samples = []  # list of tuple of 2 (str: target, vector: (0,1,-1)^|V| | 1 for pos, -1 for neg)
+        candidates = [(index, self.compute_similarity(w, self.index_to_word[index])) for index in
+                      self.index_to_word.keys() if index != w_index]
+
+        candidates = sorted(candidates, key=lambda x: x[1], reverse=True)[:n]
+
+        candidates = [self.index_to_word[i[0]] for i in candidates]
+        return candidates
+
+    # def forward(self, w_index):
+    #     hidden = self.T[:, w_index][:, None]
+    #     output_layer = np.dot(self.C, hidden)
+    #     y_pred = sigmoid(output_layer)
+    #     return y_pred
+
+    def create_pos_samples(self):
+        print('---------- Create Pos Samples ----------') if printing else None
+
+        pos_samples = []
         for sent in self.sentences:
-            sent_list = sent.split(" ")
+            sent_list = [w for w in sent.split(" ") if w in self.word_count]
 
-            for i in range(len(sent_list)):
-                target = sent_list[i]
-                if target not in self.word_count: continue
-                target_indx = self.word_index[target]
+            pos_forwards = list(skipgrams(sent_list, 2, self.context // 2 - 1))
+            pos_reverse = list(skipgrams(sent_list[::-1], 2, self.context // 2 - 1))
+            pos = pos_forwards + pos_reverse
+            cs = {}
+            for t, c in pos:
+                t_indx = self.word_index[t]
+                c_indx = self.word_index[c]
+                cs.setdefault(t_indx, []).append(c_indx)
+            if len(cs) > 0:
+                pos_samples.append(cs)
 
-                pos_samples = set()
-                # create positive samples
-                context = sent_list[i - self.context:i] + sent_list[i + 1:i + 1 + self.context]
-                for c in context:
-                    if c not in self.word_count or c == target: continue
-                    pos_samples.add(self.word_index[c])
+            # neg_samples = set()
+            # # create negative samples
+            # neg_word = random.choices(list(self.word_count.keys()), weights=list(self.word_count.values()),
+            #                           k=self.neg_samples * len(pos_samples))
+            # neg_samples.update([self.word_index[c] for c in neg_word if c != target])
+            #
+            # # transform samples to vector
+            # pos_y = np.ones(len(pos_samples), dtype=int)
+            # neg_y = np.zeros(len(neg_samples - pos_samples), dtype=int)
+            # y = np.concatenate((pos_y, neg_y)).reshape((-1, 1))
+            # all_samples = list(pos_samples) + list(neg_samples - pos_samples)
+            #
+            # if len(all_samples) > 0:
+            #     total_samples.append((target_indx, all_samples, y))
+        return pos_samples
 
-                neg_samples = set()
-                # create negative samples
-                neg_word = random.choices(list(self.word_count.keys()), weights=list(self.word_count.values()),
-                                          k=self.neg_samples * len(pos_samples))
-                neg_samples.update([self.word_index[c] for c in neg_word if c != target])
+    def add_neg_samples(self, t_index, pos_indexes):
+        target = self.index_to_word[t_index]
+        neg_word = random.choices(list(self.word_count.keys()), weights=list(self.word_count.values()),
+                                  k=self.neg_samples * len(pos_indexes))
+        neg_indexes = [self.word_index[c] for c in neg_word if c != target]
 
-                # transform samples to vector
-                pos_y = np.ones(len(pos_samples), dtype=int)
-                neg_y = np.zeros(len(neg_samples - pos_samples), dtype=int)
-                y = np.concatenate((pos_y, neg_y)).reshape((-1, 1))
-                all_samples = list(pos_samples) + list(neg_samples - pos_samples)
+        # transform samples to vector
+        pos_y = np.ones(len(pos_indexes), dtype=int)
+        neg_y = np.zeros(len(neg_indexes), dtype=int)
+        y = np.concatenate((pos_y, neg_y)).reshape((-1, 1))
+        pos_neg = pos_indexes + neg_indexes
 
-                if len(all_samples) > 0:
-                    total_samples.append((target_indx, all_samples, y))
-        return total_samples
+        return pos_neg, y
 
-    def learn_embeddings(self, step_size=0.001, epochs=50, early_stopping=3, model_path=None, printing=True):
+    def learn_embeddings(self, step_size=0.001, epochs=50, early_stopping=3, model_path=None, keep_train=False):
         """Returns a trained embedding models and saves it in the specified path
 
         Args:
@@ -178,6 +216,10 @@ class SkipGram:
         T = np.random.rand(self.d, vocab_size)  # embedding matrix of target words
         C = np.random.rand(vocab_size, self.d)  # embedding matrix of context words
 
+        if keep_train:
+            T = self.T
+            C = self.C
+
         # tips:
         # 1. have a flag that allows printing to standard output so you can follow timing, loss change etc.
         # 2. print progress indicators every N (hundreds? thousands? an epoch?) samples
@@ -185,37 +227,36 @@ class SkipGram:
         # 4.1 before you start - have the training examples ready - both positive and negative samples
         # 4.2. it is recommended to train on word indices and not the strings themselves.
 
-        # TODO
-        samples = self.create_samples()
+        pos_samples = self.create_pos_samples()
+
+        print('========== Start Learning ==========') if printing else None
         running_loss = []
         for i in range(1, epochs + 1):
             epoch_loss = []
-            for target_index, c_indexs, y_true in samples:
-                input_layer = np.zeros(self.vocab_size, dtype=int)
-                input_layer[target_index] = 1
-                input_layer = np.vstack(input_layer)
+            for j, sent_dict in enumerate(pos_samples):
+                # print(j, '/', len(pos_samples), 'sentence') if printing and j % 500 == 0 else None
 
-                hidden = T[:, target_index][:, None]
-                C_context = C[c_indexs]
-                m = len(c_indexs)
+                for t_index, pos_indexes in sent_dict.items():
+                    c_indexes, y_true = self.add_neg_samples(t_index, pos_indexes)
 
-                output_layer = np.dot(C_context, hidden)
-                y_pred = sigmoid(output_layer)
-                e = y_pred - y_true
-                loss = -(np.dot(np.log(y_pred.reshape(-1)), y_true.reshape(-1).T) + np.dot(
-                    np.log(1 - y_pred.reshape(-1)),
-                    (1 - y_true.reshape(-1)).T))
-                """
-                I HAVE PROBLEM WITH THE Y OF SAMPLES - HOW TO REPRESENT THE Y_TRUE VECTOR(VAL PARAM)
-                I HAVE PROBLEM WITH THE LOSS - AFTER FEW ITERATION THE LOSS IS NEGATIVE!
-                """
+                    hidden = T[:, t_index][:, None]
+                    C_context = C[c_indexes]
+                    m = len(c_indexes)
 
-                epoch_loss.append(loss)
-                c_grad = np.dot(hidden, e.T).T
-                # t_grad = np.dot(input_layer, np.dot(C_context.T, e).T).T
-                t_grad = np.dot(e.T, C_context).T / m
-                C[c_indexs, :] -= step_size * c_grad
-                T[:, [target_index]] -= step_size * t_grad
+                    output_layer = np.dot(C_context, hidden)
+                    y_pred = sigmoid(output_layer)
+                    e = y_pred - y_true
+                    loss = -(np.dot(np.log(y_pred.reshape(-1)), y_true.reshape(-1).T) + np.dot(
+                        np.log(1 - y_pred.reshape(-1)),
+                        (1 - y_true.reshape(-1)).T))
+
+                    epoch_loss.append(loss)
+                    c_grad = np.dot(hidden, e.T).T
+                    # t_grad = np.dot(input_layer, np.dot(C_context.T, e).T).T
+                    t_grad = np.dot(e.T, C_context).T / m
+                    # C[c_indexes, :] -= step_size * c_grad
+                    np.subtract.at(C, c_indexes, step_size * c_grad)
+                    T[:, [t_index]] -= step_size * t_grad
 
             mean_epoch_loss = np.mean(epoch_loss)
             running_loss.append(epoch_loss)
