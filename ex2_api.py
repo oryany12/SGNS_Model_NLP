@@ -62,21 +62,27 @@ def load_model(fn):
     f = open(fn, "rb")
     sg_model = pickle.load(f)
     f.close()
+    print(f"Load from {fn} file") if printing else None
 
     return sg_model
+
+
+def save_model(model, fn):
+    with open(fn, "wb") as f:
+        pickle.dump(model, f)
+    print(f"saved as {fn} file") if printing else None
 
 
 class SkipGram:
     def __init__(self, sentences, d=100, neg_samples=4, context=4, word_count_threshold=5):
         """
-
         :param sentences: list of sentences
         :param d: Dimension of the embedding
         :param neg_samples: number of negative samples to each positive sample
         :param context: the size of the context window (not counting the target word)
         :param word_count_threshold: ignore low frequency words (appearing under the threshold)
         """
-        print('++++++++++ Initial SkipGram ++++++++++') if printing else None
+        print('Initial SkipGram...') if printing else None
 
         self.sentences = sentences
         self.d = d  # embedding dimension
@@ -107,6 +113,8 @@ class SkipGram:
         self.T = np.random.rand(self.d, self.vocab_size)  # embedding representation of the words as target
         self.C = np.random.rand(self.vocab_size, self.d)  # embedding representation of the words as context
 
+        self.V = self.combine_vectors(self.T, self.C)  # the combination of T and C
+
     def compute_similarity(self, w1, w2):
         """ Returns the cosine similarity (in [0,1]) between the specified words.
 
@@ -136,6 +144,7 @@ class SkipGram:
             w: the word to find close words to.
             n: the number of words to return. Defaults to 5.
         """
+        w = w.lower()
         w_index = self.word_index[w]
         if w not in self.word_index:
             return []
@@ -145,17 +154,16 @@ class SkipGram:
 
         candidates = sorted(candidates, key=lambda x: x[1], reverse=True)[:n]
 
+        print([(self.index_to_word[i[0]],i[1]) for i in candidates]) if printing else None
+
         candidates = [self.index_to_word[i[0]] for i in candidates]
         return candidates
 
-    # def forward(self, w_index):
-    #     hidden = self.T[:, w_index][:, None]
-    #     output_layer = np.dot(self.C, hidden)
-    #     y_pred = sigmoid(output_layer)
-    #     return y_pred
-
     def create_pos_samples(self):
-        print('---------- Create Pos Samples ----------') if printing else None
+        """
+        create to each target word in every sentence list of context in the sentence
+        :return: list of dicts. each dict is for sentence, key: target, value: list of context
+        """
 
         pos_samples = []
         for sent in self.sentences:
@@ -189,6 +197,14 @@ class SkipGram:
         return pos_samples
 
     def add_neg_samples(self, t_index, pos_indexes):
+        """
+        adding random samples to each target
+        :param t_index:
+        :param pos_indexes:
+        :return: pos_neg, y
+        pos_neg: list of indexs, first the positive then negetive
+        y: vector of True label, first ones then zeros [1,1,1,0,0,0,0,0]
+        """
         target = self.index_to_word[t_index]
         neg_word = random.choices(list(self.word_count.keys()), weights=list(self.word_count.values()),
                                   k=self.neg_samples * len(pos_indexes))
@@ -229,10 +245,13 @@ class SkipGram:
 
         pos_samples = self.create_pos_samples()
 
-        print('========== Start Learning ==========') if printing else None
+        print('Start Learning...') if printing else None
         running_loss = []
+        not_improved = 0
+        last_loss = math.inf
         for i in range(1, epochs + 1):
             epoch_loss = []
+            random.shuffle(pos_samples)
             for j, sent_dict in enumerate(pos_samples):
                 # print(j, '/', len(pos_samples), 'sentence') if printing and j % 500 == 0 else None
 
@@ -250,7 +269,7 @@ class SkipGram:
                         np.log(1 - y_pred.reshape(-1)),
                         (1 - y_true.reshape(-1)).T))
 
-                    epoch_loss.append(loss)
+                    epoch_loss.append(loss / len(c_indexes))
                     c_grad = np.dot(hidden, e.T).T
                     # t_grad = np.dot(input_layer, np.dot(C_context.T, e).T).T
                     t_grad = np.dot(e.T, C_context).T / m
@@ -259,24 +278,32 @@ class SkipGram:
                     T[:, [t_index]] -= step_size * t_grad
 
             mean_epoch_loss = np.mean(epoch_loss)
-            running_loss.append(epoch_loss)
+            running_loss.append(mean_epoch_loss)
             print(f'Epoch {i} Loss: ', np.round(mean_epoch_loss, 4)) if printing else None
+
+            # check early_stopping
+            if last_loss < running_loss[-1]:
+                not_improved += 1
+                if not_improved >= early_stopping:
+                    print(f'Early Stopping: {early_stopping} Epochs not Improved') if printing else None
+                    break
+            else:
+                not_improved = 0
+            last_loss = running_loss[-1]
 
             # backup the last trained model (the last epoch)
             self.T = T
             self.C = C
-            with open("temp.pickle", "wb") as f:
-                pickle.dump(self, f)
 
             step_size *= 1 / (1 + step_size * i)
-        print("done training")
+
+        print("Done Training") if printing else None
 
         self.T = T
         self.C = C
 
-        with open(model_path, "wb") as f:
-            pickle.dump(self, f)
-        print(f"saved as {model_path} file") if printing else None
+        if model_path is not None:
+            save_model(self, model_path)
 
         return T, C
 
@@ -294,8 +321,23 @@ class SkipGram:
                    4: concat C and T vectors (effectively doubling the dimention of the embedding space)
             model_path: full path (including file name) to save the model pickle at.
         """
+        V = np.array([])
 
-        # TODO
+        if combo == 0:
+            V = T.T
+        elif combo == 1:
+            V = C
+        elif combo == 2:
+            V = np.multiply(C, T.T)
+        elif combo == 3:
+            V = np.add(C, T.T)
+        elif combo == 4:
+            V = np.concatenate((C, T.T), axis=1)
+
+        self.V = V
+
+        if model_path is not None:
+            save_model(self, model_path)
 
         return V
 
