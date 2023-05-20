@@ -1,4 +1,4 @@
-from ex2_api import *
+from ex2 import *
 from nltk import skipgrams
 
 fn = 'Corpus/drSeuss.txt'

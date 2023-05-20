@@ -5,7 +5,7 @@ from collections import Counter
 
 import numpy as np
 
-from ex2_api import SkipGram, normalize_text, sigmoid
+from ex2 import SkipGram, normalize_text, sigmoid
 
 fn = 'H:/My Drive/University/Year 4/Semester H/Introduction to Natural Language Processing (NLP)/Home Works/HW2/tests/unicorn.txt'
 file_path = 'H:/My Drive/University/Year 4/Semester H/Introduction to Natural Language Processing (NLP)/Home Works/HW2/models/model.pkl'
