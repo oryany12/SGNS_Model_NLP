@@ -2,16 +2,19 @@
 API for ex2, implementing the skip-gram model (with negative sampling).
 
 """
+import math
 import pickle
-import pandas as pd
-import numpy as np
-import os, time, re, sys, random, math, collections, nltk
+import random
+import re
 from collections import Counter
-from nltk.corpus import stopwords
+
+import nltk
+import numpy as np
 from nltk import skipgrams
+from nltk.corpus import stopwords
 
 nltk.download("stopwords", quiet=True)
-printing = True
+printing = False
 
 
 # static functions
@@ -112,7 +115,7 @@ class SkipGram:
 
         # create word-index mapping
         self.word_index = {w: i for i, w in enumerate(self.word_count.keys())}
-        self.index_to_word = {i: w for w, i in self.word_index.items()}
+        self.index_word = {i: w for w, i in self.word_index.items()}
 
         self.T = np.random.rand(self.d, self.vocab_size)  # embedding representation of the words as target
         self.C = np.random.rand(self.vocab_size, self.d)  # embedding representation of the words as context
@@ -134,10 +137,13 @@ class SkipGram:
         indx1 = self.word_index[w1]
         indx2 = self.word_index[w2]
 
-        v1 = self.T[:, indx1]
-        v2 = self.T[:, indx2]
+        v1 = self.V.T[:, indx1]
+        v2 = self.V.T[:, indx2]
 
         sim = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))  # Cosine-Similarity
+
+        if sim is None or math.isnan(sim):
+            return 0.0
 
         return sim
 
@@ -153,14 +159,14 @@ class SkipGram:
             return []
 
         w_index = self.word_index[w]
-        word_emb = self.T[:, w_index]
+        word_emb = self.V[w_index, :]
 
-        cos_sim = np.dot(self.T.T, word_emb) / (
-                np.linalg.norm(self.T.T, axis=1) * np.linalg.norm(word_emb))
+        cos_sim = np.dot(self.V, word_emb) / (
+                np.linalg.norm(self.V, axis=1) * np.linalg.norm(word_emb))
 
-        max_sorted = list(np.argsort(cos_sim)[::-1][1:n + 1])  # the first index is the same word
+        max_sorted = list(np.argsort(cos_sim)[::-1][:n + 1])  # the first index is the same word
 
-        candidates = [self.index_to_word[i] for i in max_sorted]
+        candidates = [self.index_word[i] for i in max_sorted if i != w_index]
 
         return candidates
 
@@ -172,7 +178,7 @@ class SkipGram:
 
         pos_samples = []
         for sent in self.sentences:
-            sent_list = [w for w in sent.split(" ") if w in self.word_count]
+            sent_list = [w for w in sent.split(" ") if w in self.word_index]
 
             pos_forwards = list(skipgrams(sent_list, 2, self.context // 2 - 1))
             pos_reverse = list(skipgrams(sent_list[::-1], 2, self.context // 2 - 1))
@@ -196,7 +202,7 @@ class SkipGram:
         pos_neg: list of indexs, first the positive then negetive
         y: vector of True label, first ones then zeros [1,1,1,0,0,0,0,0]
         """
-        target = self.index_to_word[t_index]
+        target = self.index_word[t_index]
         neg_word = random.choices(list(self.word_count.keys()), weights=list(self.word_count.values()),
                                   k=self.neg_samples * len(pos_indexes))
         neg_indexes = [self.word_index[c] for c in neg_word if c != target]
@@ -265,11 +271,10 @@ class SkipGram:
 
                     epoch_loss.append(loss / m)
                     c_grad = np.dot(hidden, e.T).T
-                    # t_grad = np.dot(input_layer, np.dot(C_context.T, e).T).T
                     t_grad = np.dot(e.T, C_context).T / m
                     # C[c_indexes, :] -= step_size * c_grad
                     np.subtract.at(C, c_indexes, step_size * c_grad)
-                    np.subtract.at(T, t_index, step_size * t_grad)
+                    T[:, [t_index]] -= step_size * t_grad
 
             mean_epoch_loss = np.mean(epoch_loss)
             running_loss.append(mean_epoch_loss)
@@ -344,24 +349,24 @@ class SkipGram:
         """
         w1, w2, w3 = w1.lower(), w2.lower(), w3.lower()
 
-        if w1 not in self.word_count or \
-                w2 not in self.word_count or \
-                w3 not in self.word_count:
+        if w1 not in self.word_index or \
+                w2 not in self.word_index or \
+                w3 not in self.word_index:
             return ""
 
         w1_index = self.word_index[w1]
         w2_index = self.word_index[w2]
         w3_index = self.word_index[w3]
 
-        w1_emb = self.T[:, w1_index]
-        w2_emb = self.T[:, w2_index]
-        w3_emb = self.T[:, w3_index]
+        w1_emb = self.V[w1_index, :]
+        w2_emb = self.V[w2_index, :]
+        w3_emb = self.V[w3_index, :]
 
         target_emb = w1_emb - w2_emb + w3_emb
 
-        cos_sim = np.dot(self.T.T, target_emb) / (
-                np.linalg.norm(self.T.T, axis=1) * np.linalg.norm(target_emb))
-        max_sorted = list(np.argsort(cos_sim)[::-1][:4])
+        cos_sim = np.dot(self.V, target_emb) / (
+                np.linalg.norm(self.V, axis=1) * np.linalg.norm(target_emb))
+        max_sorted = list(np.argsort(cos_sim)[::-1][:5])
 
         # take the first word that is not w1,w2,w3
         target_index = 0
@@ -372,7 +377,7 @@ class SkipGram:
                 target_index = candidate
                 break
 
-        return self.index_to_word[target_index]
+        return self.index_word[target_index]
 
     def test_analogy(self, w1, w2, w3, w4, n=1):
         """Returns True if sim(w1-w2+w3, w4)@n; Otherwise return False.
@@ -388,6 +393,6 @@ class SkipGram:
             """
 
         target_w = self.find_analogy(w1, w2, w3)
-        n_closest_words = self.get_closest_words(target_w, n=n)
+        n_closest_words = self.get_closest_words(target_w, n=n - 1)
 
-        return w4 in n_closest_words
+        return w4 in n_closest_words or target_w == w4

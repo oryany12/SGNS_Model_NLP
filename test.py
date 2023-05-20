@@ -7,4 +7,4 @@ fn = 'Corpus/drSeuss.txt'
 norm_text = normalize_text(fn)
 
 skipgram = SkipGram(norm_text)
-skipgram.learn_embeddings(epochs=100, early_stopping=10, model_path='models/model.pkl')
+skipgram.learn_embeddings(epochs=500, early_stopping=10, model_path='models/model.pkl')
